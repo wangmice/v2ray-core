@@ -6,7 +6,8 @@ import (
 	"v2ray.com/core/common"
 	"v2ray.com/core/common/buf"
 	"v2ray.com/core/common/net"
-	"v2ray.com/core/common/signal"
+	"v2ray.com/core/common/serial"
+	"v2ray.com/core/common/task"
 )
 
 type AddressOption func(*AddressParser)
@@ -53,7 +54,7 @@ func NewAddressParser(options ...AddressOption) *AddressParser {
 }
 
 func (p *AddressParser) readPort(b *buf.Buffer, reader io.Reader) (net.Port, error) {
-	if err := b.AppendSupplier(buf.ReadFullFrom(reader, 2)); err != nil {
+	if _, err := b.ReadFullFrom(reader, 2); err != nil {
 		return 0, err
 	}
 	return net.PortFromBytes(b.BytesFrom(-2)), nil
@@ -73,7 +74,7 @@ func isValidDomain(d string) bool {
 }
 
 func (p *AddressParser) readAddress(b *buf.Buffer, reader io.Reader) (net.Address, error) {
-	if err := b.AppendSupplier(buf.ReadFullFrom(reader, 1)); err != nil {
+	if _, err := b.ReadFullFrom(reader, 1); err != nil {
 		return nil, err
 	}
 
@@ -89,27 +90,27 @@ func (p *AddressParser) readAddress(b *buf.Buffer, reader io.Reader) (net.Addres
 
 	switch addrFamily {
 	case net.AddressFamilyIPv4:
-		if err := b.AppendSupplier(buf.ReadFullFrom(reader, 4)); err != nil {
+		if _, err := b.ReadFullFrom(reader, 4); err != nil {
 			return nil, err
 		}
 		return net.IPAddress(b.BytesFrom(-4)), nil
 	case net.AddressFamilyIPv6:
-		if err := b.AppendSupplier(buf.ReadFullFrom(reader, 16)); err != nil {
+		if _, err := b.ReadFullFrom(reader, 16); err != nil {
 			return nil, err
 		}
 		return net.IPAddress(b.BytesFrom(-16)), nil
 	case net.AddressFamilyDomain:
-		if err := b.AppendSupplier(buf.ReadFullFrom(reader, 1)); err != nil {
+		if _, err := b.ReadFullFrom(reader, 1); err != nil {
 			return nil, err
 		}
 		domainLength := int32(b.Byte(b.Len() - 1))
-		if err := b.AppendSupplier(buf.ReadFullFrom(reader, domainLength)); err != nil {
+		if _, err := b.ReadFullFrom(reader, domainLength); err != nil {
 			return nil, err
 		}
 		domain := string(b.BytesFrom(-domainLength))
 		if maybeIPPrefix(domain[0]) {
 			addr := net.ParseAddress(domain)
-			if addr.Family().IsIPv4() || addrFamily.IsIPv6() {
+			if addr.Family().IsIPv4() || addr.Family().IsIPv6() {
 				return addr, nil
 			}
 		}
@@ -153,9 +154,9 @@ func (p *AddressParser) ReadAddressPort(buffer *buf.Buffer, input io.Reader) (ne
 	var err error
 
 	if p.portFirst {
-		err = signal.Execute(pTask, aTask)
+		err = task.Run(task.Sequential(pTask, aTask))()
 	} else {
-		err = signal.Execute(aTask, pTask)
+		err = task.Run(task.Sequential(aTask, pTask))()
 	}
 
 	if err != nil {
@@ -166,7 +167,7 @@ func (p *AddressParser) ReadAddressPort(buffer *buf.Buffer, input io.Reader) (ne
 }
 
 func (p *AddressParser) writePort(writer io.Writer, port net.Port) error {
-	return common.Error2(writer.Write(port.Bytes(nil)))
+	return common.Error2(serial.WriteUint16(writer, port.Value()))
 }
 
 func (p *AddressParser) writeAddress(writer io.Writer, address net.Address) error {
@@ -177,21 +178,21 @@ func (p *AddressParser) writeAddress(writer io.Writer, address net.Address) erro
 
 	switch address.Family() {
 	case net.AddressFamilyIPv4, net.AddressFamilyIPv6:
-		return signal.Execute(func() error {
+		return task.Run(task.Sequential(func() error {
 			return common.Error2(writer.Write([]byte{tb}))
 		}, func() error {
 			return common.Error2(writer.Write(address.IP()))
-		})
+		}))()
 	case net.AddressFamilyDomain:
 		domain := address.Domain()
 		if isDomainTooLong(domain) {
 			return newError("Super long domain is not supported: ", domain)
 		}
-		return signal.Execute(func() error {
+		return task.Run(task.Sequential(func() error {
 			return common.Error2(writer.Write([]byte{tb, byte(len(domain))}))
 		}, func() error {
 			return common.Error2(writer.Write([]byte(domain)))
-		})
+		}))()
 	default:
 		panic("Unknown family type.")
 	}
@@ -207,8 +208,8 @@ func (p *AddressParser) WriteAddressPort(writer io.Writer, addr net.Address, por
 	}
 
 	if p.portFirst {
-		return signal.Execute(pTask, aTask)
+		return task.Run(task.Sequential(pTask, aTask))()
 	}
 
-	return signal.Execute(aTask, pTask)
+	return task.Run(task.Sequential(aTask, pTask))()
 }

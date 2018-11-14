@@ -44,10 +44,10 @@ echo "Launching build machine."
 DIR="$(dirname "$0")"
 RAND="$(openssl rand -hex 5)"
 gcloud compute instances create "v2raycore-${RAND}" \
-    --machine-type=n1-highcpu-2 \
+    --machine-type=n1-standard-2 \
     --metadata=release_tag=v${VER},prerelease=${PRE} \
     --metadata-from-file=startup-script=${DIR}/release-ci.sh \
-    --zone=us-central1-c \
+    --zone=europe-west4-c \
     --project ${PROJECT} \
     --scopes "https://www.googleapis.com/auth/compute,https://www.googleapis.com/auth/devstorage.read_write" \
 

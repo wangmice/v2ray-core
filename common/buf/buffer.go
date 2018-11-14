@@ -2,17 +2,20 @@ package buf
 
 import (
 	"io"
+
+	"v2ray.com/core/common/bytespool"
 )
 
-// Supplier is a writer that writes contents into the given buffer.
-type Supplier func([]byte) (int, error)
+const (
+	// Size of a regular buffer.
+	Size = 2048
+)
 
 // Buffer is a recyclable allocation of a byte array. Buffer.Release() recycles
 // the buffer into an internal buffer pool, in order to recreate a buffer more
 // quickly.
 type Buffer struct {
-	v []byte
-
+	v     []byte
 	start int32
 	end   int32
 }
@@ -22,10 +25,9 @@ func (b *Buffer) Release() {
 	if b == nil || b.v == nil {
 		return
 	}
-	freeBytes(b.v)
+	pool.Put(b.v)
 	b.v = nil
-	b.start = 0
-	b.end = 0
+	b.Clear()
 }
 
 // Clear clears the content of the buffer, results an empty buffer with
@@ -33,18 +35,6 @@ func (b *Buffer) Release() {
 func (b *Buffer) Clear() {
 	b.start = 0
 	b.end = 0
-}
-
-// AppendBytes appends one or more bytes to the end of the buffer.
-func (b *Buffer) AppendBytes(bytes ...byte) (int, error) {
-	return b.Write(bytes)
-}
-
-// AppendSupplier appends the content of a BytesWriter to the buffer.
-func (b *Buffer) AppendSupplier(writer Supplier) error {
-	nBytes, err := writer(b.v[b.end:])
-	b.end += int32(nBytes)
-	return err
 }
 
 // Byte returns the bytes at index.
@@ -62,12 +52,16 @@ func (b *Buffer) Bytes() []byte {
 	return b.v[b.start:b.end]
 }
 
-// Reset resets the content of the Buffer with a supplier.
-func (b *Buffer) Reset(writer Supplier) error {
-	nBytes, err := writer(b.v)
-	b.start = 0
-	b.end = int32(nBytes)
-	return err
+// Extend increases the buffer size by n bytes, and returns the extended part.
+// It panics if result size is larger than buf.Size.
+func (b *Buffer) Extend(n int32) []byte {
+	end := b.end + n
+	if end > int32(len(b.v)) {
+		panic(newError("out of bound: ", end))
+	}
+	ext := b.v[b.end:end]
+	b.end = end
+	return ext
 }
 
 // BytesRange returns a slice of this buffer with given from and to boundary.
@@ -145,6 +139,16 @@ func (b *Buffer) Write(data []byte) (int, error) {
 	return nBytes, nil
 }
 
+// WriteBytes appends one or more bytes to the end of the buffer.
+func (b *Buffer) WriteBytes(bytes ...byte) (int, error) {
+	return b.Write(bytes)
+}
+
+// WriteString implements io.StringWriter.
+func (b *Buffer) WriteString(s string) (int, error) {
+	return b.Write([]byte(s))
+}
+
 // Read implements io.Reader.Read().
 func (b *Buffer) Read(data []byte) (int, error) {
 	if b.Len() == 0 {
@@ -159,21 +163,34 @@ func (b *Buffer) Read(data []byte) (int, error) {
 	return nBytes, nil
 }
 
+// ReadFrom implements io.ReaderFrom.
+func (b *Buffer) ReadFrom(reader io.Reader) (int64, error) {
+	n, err := reader.Read(b.v[b.end:])
+	b.end += int32(n)
+	return int64(n), err
+}
+
+// ReadFullFrom reads exact size of bytes from given reader, or until error occurs.
+func (b *Buffer) ReadFullFrom(reader io.Reader, size int32) (int64, error) {
+	end := b.end + size
+	if end > int32(len(b.v)) {
+		return 0, newError("out of bound: ", end)
+	}
+	n, err := io.ReadFull(reader, b.v[b.end:end])
+	b.end += int32(n)
+	return int64(n), err
+}
+
 // String returns the string form of this Buffer.
 func (b *Buffer) String() string {
 	return string(b.Bytes())
 }
 
+var pool = bytespool.GetPool(Size)
+
 // New creates a Buffer with 0 length and 2K capacity.
 func New() *Buffer {
 	return &Buffer{
-		v: pool[0].Get().([]byte),
-	}
-}
-
-// NewSize creates and returns a buffer with 0 length and at least the given capacity. Capacity must be positive.
-func NewSize(capacity int32) *Buffer {
-	return &Buffer{
-		v: newBytes(capacity),
+		v: pool.Get().([]byte),
 	}
 }

@@ -23,7 +23,7 @@ func fetchInput(ctx context.Context, input io.Reader, reader PacketReader, conn 
 	go func() {
 		for {
 			payload := buf.New()
-			if err := payload.Reset(buf.ReadFrom(input)); err != nil {
+			if _, err := payload.ReadFrom(input); err != nil {
 				payload.Release()
 				close(cache)
 				return
@@ -49,13 +49,12 @@ func DialKCP(ctx context.Context, dest net.Destination) (internet.Connection, er
 	dest.Network = net.Network_UDP
 	newError("dialing mKCP to ", dest).WriteToLog()
 
-	src := internet.DialerSourceFromContext(ctx)
-	rawConn, err := internet.DialSystem(ctx, src, dest)
+	rawConn, err := internet.DialSystem(ctx, dest)
 	if err != nil {
 		return nil, newError("failed to dial to dest: ", err).AtWarning().Base(err)
 	}
 
-	kcpSettings := internet.TransportSettingsFromContext(ctx).(*Config)
+	kcpSettings := internet.StreamSettingsFromContext(ctx).ProtocolSettings.(*Config)
 
 	header, err := kcpSettings.GetPackerHeader()
 	if err != nil {
@@ -95,5 +94,5 @@ func DialKCP(ctx context.Context, dest net.Destination) (internet.Connection, er
 }
 
 func init() {
-	common.Must(internet.RegisterTransportDialer(internet.TransportProtocol_MKCP, DialKCP))
+	common.Must(internet.RegisterTransportDialer(protocolName, DialKCP))
 }
